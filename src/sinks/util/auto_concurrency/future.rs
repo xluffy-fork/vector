@@ -1,6 +1,6 @@
 //! Future types
 //!
-use super::controller::Controller;
+use super::controller::{Controller, IsBackPressure};
 use futures_core::ready;
 use pin_project::pin_project;
 use std::time::Instant;
@@ -42,13 +42,14 @@ impl<T> ResponseFuture<T> {
 impl<F, T, E> Future for ResponseFuture<F>
 where
     F: Future<Output = Result<T, E>>,
+    E: IsBackPressure,
 {
     type Output = Result<T, E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let future = self.project();
         let output = ready!(future.inner.poll(cx));
-        future.controller.adjust_to_response(*future.start);
+        future.controller.adjust_to_response(*future.start, &output);
         Poll::Ready(output)
     }
 }

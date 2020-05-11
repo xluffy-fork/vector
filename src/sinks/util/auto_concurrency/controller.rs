@@ -10,6 +10,17 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 const EWMA_ALPHA: f64 = 0.5;
 const THRESHOLD_RATIO: f64 = 0.01;
 
+#[derive(Debug, Eq, PartialEq)]
+enum ResponseType {
+    Normal,
+    BackPressure,
+    Other,
+}
+
+pub(crate) trait IsBackPressure {
+    fn is_back_pressure(&self) -> bool;
+}
+
 /// Shared class for `tokio::sync::Semaphore` that manages adjusting the
 /// semaphore size and other associated data.
 #[derive(Debug)]
@@ -60,9 +71,19 @@ impl Controller {
         }
     }
 
-    pub(super) fn adjust_to_response(&self, start: Instant) {
-        // Problems:
-        // * adjusts for any response, does not differentiate
+    pub(super) fn adjust_to_response<T, E>(&self, start: Instant, response: &Result<T, E>)
+    where
+        E: IsBackPressure,
+    {
+        let response = match response {
+            Ok(_) => ResponseType::Normal,
+            Err(r) if r.is_back_pressure() => ResponseType::BackPressure,
+            Err(_) => ResponseType::Other,
+        };
+        self._adjust_to_response(start, response)
+    }
+
+    fn _adjust_to_response(&self, start: Instant, response: ResponseType) {
         let now = Instant::now();
         let rtt = now.saturating_duration_since(start).as_secs_f64();
         let mut inner = self.inner.lock().expect("Controller mutex is poisoned");
@@ -70,7 +91,14 @@ impl Controller {
         let avg = inner.average_rtt;
         if avg > 0.0 && now >= inner.next_update {
             let threshold = avg * THRESHOLD_RATIO;
-            if inner.current > 1 && rtt >= avg + threshold {
+
+            // A back pressure response, either explicit or implicit due
+            // to increasing response times, triggers a decrease in
+            // concurrency.
+            if inner.current > 1
+                && (response == ResponseType::BackPressure
+                    || response == ResponseType::Normal && rtt >= avg + threshold)
+            {
                 // Decrease (multiplicative) the current concurrency
                 let new_current = inner.current / 2;
                 // Have to forget some permits from the semaphore but there
@@ -83,7 +111,9 @@ impl Controller {
                     }
                 }
                 inner.current = new_current;
-            } else if inner.current < self.max && rtt <= avg {
+            }
+            // A normal quick response triggers an increase in concurrency.
+            else if inner.current < self.max && response == ResponseType::Normal && rtt <= avg {
                 // Increase (additive) the current concurrency
                 self.semaphore.add_permits(1);
                 inner.current += 1;

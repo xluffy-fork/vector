@@ -1,4 +1,4 @@
-use super::controller::Controller;
+use super::controller::{Controller, IsBackPressure};
 use super::future::ResponseFuture;
 
 use tower_service::Service;
@@ -42,6 +42,7 @@ impl<T> AutoConcurrencyLimit<T> {
 impl<S, Request> Service<Request> for AutoConcurrencyLimit<S>
 where
     S: Service<Request>,
+    S::Error: IsBackPressure,
 {
     type Response = S::Response;
     type Error = S::Error;
