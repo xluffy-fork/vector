@@ -10,6 +10,25 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 const EWMA_ALPHA: f64 = 0.5;
 const THRESHOLD_RATIO: f64 = 0.01;
 
+#[derive(Clone, Copy, Debug, Default)]
+struct EWMA {
+    average: f64,
+}
+
+impl EWMA {
+    fn average(&self) -> f64 {
+        self.average
+    }
+
+    fn update(&mut self, point: f64) -> f64 {
+        self.average = match self.average {
+            avg if avg == 0.0 => point,
+            avg => point * EWMA_ALPHA + avg * (1.0 - EWMA_ALPHA),
+        };
+        self.average
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum ResponseType {
     Normal,
@@ -34,19 +53,8 @@ pub(super) struct Controller {
 struct Inner {
     current: usize,
     to_forget: usize,
-    average_rtt: f64,
+    measured_rtt: EWMA,
     next_update: Instant,
-}
-
-impl Inner {
-    /// Update the average RTT using EWMA, and return the new value.
-    fn update_rtt(&mut self, rtt: f64) -> f64 {
-        self.average_rtt = match self.average_rtt {
-            avg if avg < 0.0 => rtt,
-            avg => rtt * EWMA_ALPHA + avg * (1.0 - EWMA_ALPHA),
-        };
-        self.average_rtt
-    }
 }
 
 impl Controller {
@@ -57,7 +65,7 @@ impl Controller {
             inner: Arc::new(Mutex::new(Inner {
                 current: current,
                 to_forget: 0,
-                average_rtt: -1.0,
+                measured_rtt: Default::default(),
                 next_update: Instant::now(),
             })),
         }
@@ -88,7 +96,7 @@ impl Controller {
         let rtt = now.saturating_duration_since(start).as_secs_f64();
         let mut inner = self.inner.lock().expect("Controller mutex is poisoned");
 
-        let avg = inner.average_rtt;
+        let avg = inner.measured_rtt.average();
         if avg > 0.0 && now >= inner.next_update {
             let threshold = avg * THRESHOLD_RATIO;
 
@@ -119,10 +127,11 @@ impl Controller {
                 inner.current += 1;
                 inner.to_forget = inner.to_forget.saturating_sub(1);
             }
-            let new_avg = inner.update_rtt(rtt);
+
+            let new_avg = inner.measured_rtt.update(rtt);
             inner.next_update = now + Duration::from_secs_f64(new_avg);
         } else {
-            inner.update_rtt(rtt);
+            inner.measured_rtt.update(rtt);
         }
     }
 }
