@@ -1,4 +1,5 @@
 use futures::ready;
+use std::cmp::max;
 use std::future::Future;
 use std::mem::{drop, replace};
 use std::pin::Pin;
@@ -29,6 +30,26 @@ impl EWMA {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct Mean {
+    sum: f64,
+    count: usize,
+}
+
+impl Mean {
+    fn update(&mut self, point: f64) -> f64 {
+        self.sum += point;
+        self.count += 1;
+        // Return current average
+        self.sum / max(self.count, 1) as f64
+    }
+
+    fn reset(&mut self) {
+        self.sum = 0.0;
+        self.count = 0;
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum ResponseType {
     Normal,
@@ -53,8 +74,10 @@ pub(super) struct Controller {
 struct Inner {
     current: usize,
     to_forget: usize,
-    measured_rtt: EWMA,
+    past_rtt: EWMA,
     next_update: Instant,
+    current_rtt: Mean,
+    had_back_pressure: bool,
 }
 
 impl Controller {
@@ -65,8 +88,10 @@ impl Controller {
             inner: Arc::new(Mutex::new(Inner {
                 current: current,
                 to_forget: 0,
-                measured_rtt: Default::default(),
+                past_rtt: Default::default(),
                 next_update: Instant::now(),
+                current_rtt: Default::default(),
+                had_back_pressure: false,
             })),
         }
     }
@@ -95,18 +120,19 @@ impl Controller {
         let now = Instant::now();
         let rtt = now.saturating_duration_since(start).as_secs_f64();
         let mut inner = self.inner.lock().expect("Controller mutex is poisoned");
+        if response == ResponseType::BackPressure {
+            inner.had_back_pressure = true;
+        }
 
-        let avg = inner.measured_rtt.average();
+        let rtt = inner.current_rtt.update(rtt);
+        let avg = inner.past_rtt.average();
         if avg > 0.0 && now >= inner.next_update {
             let threshold = avg * THRESHOLD_RATIO;
 
             // A back pressure response, either explicit or implicit due
             // to increasing response times, triggers a decrease in
             // concurrency.
-            if inner.current > 1
-                && (response == ResponseType::BackPressure
-                    || response == ResponseType::Normal && rtt >= avg + threshold)
-            {
+            if inner.current > 1 && (inner.had_back_pressure || rtt >= avg + threshold) {
                 // Decrease (multiplicative) the current concurrency
                 let new_current = inner.current / 2;
                 // Have to forget some permits from the semaphore but there
@@ -120,19 +146,20 @@ impl Controller {
                 }
                 inner.current = new_current;
             }
-            // A normal quick response triggers an increase in concurrency.
-            else if inner.current < self.max && response == ResponseType::Normal && rtt <= avg {
+            // Normal quick responses triggers an increase in concurrency.
+            else if inner.current < self.max && !inner.had_back_pressure && rtt <= avg {
                 // Increase (additive) the current concurrency
                 self.semaphore.add_permits(1);
                 inner.current += 1;
                 inner.to_forget = inner.to_forget.saturating_sub(1);
             }
 
-            let new_avg = inner.measured_rtt.update(rtt);
+            let new_avg = inner.past_rtt.update(rtt);
             inner.next_update = now + Duration::from_secs_f64(new_avg);
-        } else {
-            inner.measured_rtt.update(rtt);
         }
+
+        inner.had_back_pressure = false;
+        inner.current_rtt.reset();
     }
 }
 
