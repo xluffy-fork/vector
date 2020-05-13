@@ -1,7 +1,7 @@
 //! Future types
 //!
 use super::controller::{Controller, IsBackPressure};
-use futures_core::ready;
+use futures::ready;
 use pin_project::pin_project;
 use std::time::Instant;
 use std::{

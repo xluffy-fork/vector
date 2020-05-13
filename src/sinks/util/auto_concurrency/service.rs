@@ -3,7 +3,7 @@ use super::future::ResponseFuture;
 
 use tower_service::Service;
 
-use futures_core::ready;
+use futures::ready;
 use std::fmt;
 use std::future::Future;
 use std::mem;

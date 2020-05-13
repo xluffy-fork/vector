@@ -4969,7 +4969,6 @@ dependencies = [
  "flate2",
  "futures 0.1.29",
  "futures 0.3.4",
- "futures-core",
  "getset",
  "glob 0.2.11",
  "goauth",
