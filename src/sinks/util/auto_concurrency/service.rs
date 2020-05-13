@@ -1,7 +1,7 @@
 use super::controller::{Controller, IsBackPressure};
 use super::future::ResponseFuture;
 
-use tower_service::Service;
+use tower03::Service;
 
 use futures::ready;
 use std::fmt;

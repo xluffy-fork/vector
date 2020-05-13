@@ -1,5 +1,5 @@
 use super::AutoConcurrencyLimit;
-use tower_layer::Layer;
+use tower03::Layer;
 
 /// Enforces a limit on the concurrent number of requests the underlying
 /// service can handle.
