@@ -2,9 +2,7 @@
 
 mod controller;
 mod future;
-mod layer;
 mod service;
 
 pub(crate) use controller::IsBackPressure;
-pub(crate) use layer::AutoConcurrencyLimitLayer;
 pub(crate) use service::AutoConcurrencyLimit;
